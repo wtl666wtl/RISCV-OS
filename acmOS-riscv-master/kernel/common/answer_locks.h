@@ -45,7 +45,7 @@ int is_locked(struct lock* lock){
 // private for spin lock
 int holding_lock(struct lock* lock){
     /* Your code here */
-    while(1)__sync_lock_test_and_set(&(lock->locked), 1);
+    if(cpuid() == lock->cpuid)return 0;
     return -1;
 }
 
