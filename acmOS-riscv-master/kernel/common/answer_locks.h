@@ -9,21 +9,27 @@
 int lock_init(struct lock *lock){
     /* Your code here */
     if(nlock >= MAXLOCKS) BUG("Max lock count reached.");
-    __sync_lock_release(&(lock->locked));
+    lock->locked = 0;
+    lock->cpuid = -1;
     locks[nlock++] = lock;
     return 0;
 }
 
 void acquire(struct lock *lock){
     /* Your code here */
-    while(try_acquire(lock) != 0);
+    if(holding_lock(lock) == 0) BUG("Already hold this lock.");
+    while(__sync_lock_test_and_set(&(lock->locked), 1) == 1);
+    sync_synchronize();
+    __sync_lock_test_and_set(&(lock->cpuid), cpuid());
 }
 
 // Try to acquire the lock once
 // Return 0 if succeed, -1 if failed.
 int try_acquire(struct lock *lock){
     /* Your code here */
+    if(holding_lock(lock) == 0) BUG("Already hold this lock.");
     if(__sync_lock_test_and_set(&(lock->locked), 1) == 0) {
+        sync_synchronize();
         __sync_lock_test_and_set(&(lock->cpuid), cpuid());
         return 0;
     }
@@ -32,9 +38,10 @@ int try_acquire(struct lock *lock){
 
 void release(struct lock* lock){
     /* Your code here */
-    if(__sync_lock_test_and_set(&(lock->cpuid), lock->cpuid) == cpuid()) {
+    if(lock->cpuid == cpuid()) {
+        lock->cpuid = -1;
+        sync_synchronize();
         __sync_lock_release(&(lock->locked));
-        __sync_lock_release(&(lock->cpuid));
     }
 }
 
