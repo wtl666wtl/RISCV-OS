@@ -1,7 +1,7 @@
 void* kern_page_malloc() {
     // Your Code here
     // Suggested: 6 LoCs
-    if (allocated_page == (1 << INIT_MAX_PAGES)) {
+    if (allocated_page == (1 << INIT_MAX_PAGES) - 1) {
         BUG("Out of pages!");
     }else {
         for(int i = 0; i < INIT_MAX_PAGES; i++)
