@@ -6,14 +6,16 @@
 
 extern const char binary_putc_start;
 thread_t *running[NCPU];
+struct context cpu_context[NCPU];
 struct process proc[NPROC];
 struct list_head sched_list[NCPU];
 struct lock pidlock, tidlock, schedlock;
 int _pid, _tid;
 
+extern void swtch(struct context*, struct context*);
 
-// å°†ELFæ–‡ä»¶æ˜ å°„åˆ°ç»™å®šé¡µè¡¨çš„åœ°å€ç©ºé—´ï¼Œè¿”å›pcçš„æ•°å€¼
-// å…³äº ELF æ–‡ä»¶ï¼Œè¯·å‚è€ƒï¼šhttps://docs.oracle.com/cd/E19683-01/816-1386/chapter6-83432/index.html
+// ½«ELFÎÄ¼şÓ³Éäµ½¸ø¶¨Ò³±íµÄµØÖ·¿Õ¼ä£¬·µ»ØpcµÄÊıÖµ
+// ¹ØÓÚ ELF ÎÄ¼ş£¬Çë²Î¿¼£ºhttps://docs.oracle.com/cd/E19683-01/816-1386/chapter6-83432/index.html
 static uint64 load_binary(pagetable_t *target_page_table, const char *bin){
 	struct elf_file *elf;
     int i;
@@ -23,19 +25,19 @@ static uint64 load_binary(pagetable_t *target_page_table, const char *bin){
 	/* load each segment in the elf binary */
 	for (i = 0; i < elf->header.e_phnum; ++i) {
 		if (elf->p_headers[i].p_type == PT_LOAD) {
-            // æ ¹æ® ELF æ–‡ä»¶æ ¼å¼åšæ®µæ˜ å°„
-            // ä»ELFä¸­è·å¾—è¿™ä¸€æ®µçš„æ®µå¤§å°
+            // ¸ù¾İ ELF ÎÄ¼ş¸ñÊ½×ö¶ÎÓ³Éä
+            // ´ÓELFÖĞ»ñµÃÕâÒ»¶ÎµÄ¶Î´óĞ¡
             seg_sz = elf->p_headers[i].p_memsz;
-            // å¯¹åº”æ®µçš„åœ¨å†…å­˜ä¸­çš„è™šæ‹Ÿåœ°å€
+            // ¶ÔÓ¦¶ÎµÄÔÚÄÚ´æÖĞµÄĞéÄâµØÖ·
             p_vaddr = elf->p_headers[i].p_vaddr;
-            // å¯¹æ˜ å°„å¤§å°åšé¡µå¯¹é½
+            // ¶ÔÓ³Éä´óĞ¡×öÒ³¶ÔÆë
 			seg_map_sz = ROUNDUP(seg_sz + p_vaddr, PGSIZE) - PGROUNDDOWN(p_vaddr);
-            // æ¥ä¸‹æ¥ä»£ç çš„æœŸæœ›ç›®çš„ï¼šå°†ç¨‹åºä»£ç æ˜ å°„/å¤åˆ¶åˆ°å¯¹åº”çš„å†…å­˜ç©ºé—´
-            // ä¸€ç§å¯èƒ½çš„å®ç°å¦‚ä¸‹ï¼š
+            // ½ÓÏÂÀ´´úÂëµÄÆÚÍûÄ¿µÄ£º½«³ÌĞò´úÂëÓ³Éä/¸´ÖÆµ½¶ÔÓ¦µÄÄÚ´æ¿Õ¼ä
+            // Ò»ÖÖ¿ÉÄÜµÄÊµÏÖÈçÏÂ£º
             /* 
-             * åœ¨ target_page_table ä¸­åˆ†é…ä¸€å—å¤§å°
-             * é€šè¿‡ memcpy å°†æŸä¸€æ®µå¤åˆ¶è¿›å…¥è¿™ä¸€å—ç©ºé—´
-             * é¡µè¡¨æ˜ å°„ä¿®æ”¹
+             * ÔÚ target_page_table ÖĞ·ÖÅäÒ»¿é´óĞ¡
+             * Í¨¹ı memcpy ½«Ä³Ò»¶Î¸´ÖÆ½øÈëÕâÒ»¿é¿Õ¼ä
+             * Ò³±íÓ³ÉäĞŞ¸Ä
              */
 		}
 	}
@@ -65,16 +67,16 @@ int alloc_pid(){
     return pid;
 }
 
-/* åˆ†é…ä¸€ä¸ªè¿›ç¨‹ï¼Œéœ€è¦è‡³å°‘å®Œæˆä»¥ä¸‹ç›®æ ‡ï¼š
+/* ·ÖÅäÒ»¸ö½ø³Ì£¬ĞèÒªÖÁÉÙÍê³ÉÒÔÏÂÄ¿±ê£º
  * 
- * åˆ†é…ä¸€ä¸ªä¸»çº¿ç¨‹
- * åˆ›å»ºä¸€å¼ è¿›ç¨‹é¡µè¡¨
- * åˆ†é…pidã€tid
- * è®¾ç½®åˆå§‹åŒ–çº¿ç¨‹ä¸Šä¸‹æ–‡
- * è®¾ç½®åˆå§‹åŒ–çº¿ç¨‹è¿”å›åœ°å€å¯„å­˜å™¨raï¼Œæ ˆå¯„å­˜å™¨sp
+ * ·ÖÅäÒ»¸öÖ÷Ïß³Ì
+ * ´´½¨Ò»ÕÅ½ø³ÌÒ³±í
+ * ·ÖÅäpid¡¢tid
+ * ÉèÖÃ³õÊ¼»¯Ïß³ÌÉÏÏÂÎÄ
+ * ÉèÖÃ³õÊ¼»¯Ïß³Ì·µ»ØµØÖ·¼Ä´æÆ÷ra£¬Õ»¼Ä´æÆ÷sp
  * 
- * è¿™ä¸ªå‡½æ•°ä¼ å…¥å‚æ•°ä¸ºä¸€ä¸ªäºŒè¿›åˆ¶çš„ä»£ç å’Œä¸€ä¸ªçº¿ç¨‹æŒ‡é’ˆ(å…·ä½“ä¼ å…¥è§„åˆ™å¯ä»¥è‡ªå·±ä¿®æ”¹)
- * æ­¤å¤–ç¨‹åºé¦–æ¬¡è¿›å…¥ç”¨æˆ·æ€ä¹‹å‰ï¼Œåº”è¯¥è®¾ç½®å¥½trapå¤„ç†å‘é‡ä¸ºusertrapï¼ˆæˆ–è€…ä½ è‡ªå®šä¹‰çš„ï¼‰
+ * Õâ¸öº¯Êı´«Èë²ÎÊıÎªÒ»¸ö¶ş½øÖÆµÄ´úÂëºÍÒ»¸öÏß³ÌÖ¸Õë(¾ßÌå´«Èë¹æÔò¿ÉÒÔ×Ô¼ºĞŞ¸Ä)
+ * ´ËÍâ³ÌĞòÊ×´Î½øÈëÓÃ»§Ì¬Ö®Ç°£¬Ó¦¸ÃÉèÖÃºÃtrap´¦ÀíÏòÁ¿Îªusertrap£¨»òÕßÄã×Ô¶¨ÒåµÄ£©
  */
 process_t *alloc_proc(const char* bin, thread_t *thr) {
     struct process *p;
@@ -90,7 +92,7 @@ process_t *alloc_proc(const char* bin, thread_t *thr) {
             //p->pagetable = //;//?
 
             memset(&thr->context, 0, sizeof(thr->context));
-            thr->context.ra = (uint64)p;
+            //thr->context.ra = (uint64);
             thr->context.sp = thr->kstack + PGSIZE;
 
             return p;
@@ -114,9 +116,9 @@ bool load_thread(file_type_t type){
 
 }
 
-// sched_enqueueå’Œsched_dequeueçš„ä¸»è¦ä»»åŠ¡æ˜¯åŠ å…¥ä¸€ä¸ªä»»åŠ¡åˆ°é˜Ÿåˆ—ä¸­å’Œåˆ é™¤ä¸€ä¸ªä»»åŠ¡
-// è¿™ä¸¤ä¸ªå‡½æ•°çš„å±•ç¤ºäº†å¦‚ä½•ä½¿ç”¨list.hä¸­å¯çš„å‡½æ•°ï¼ˆåŠ å…¥ã€åˆ é™¤ã€åˆ¤æ–­ç©ºã€å–å…ƒç´ ï¼‰
-// å…·ä½“å¯ä»¥å‚è€ƒï¼šStackoverflowä¸Šçš„å›ç­”
+// sched_enqueueºÍsched_dequeueµÄÖ÷ÒªÈÎÎñÊÇ¼ÓÈëÒ»¸öÈÎÎñµ½¶ÓÁĞÖĞºÍÉ¾³ıÒ»¸öÈÎÎñ
+// ÕâÁ½¸öº¯ÊıµÄÕ¹Ê¾ÁËÈçºÎÊ¹ÓÃlist.hÖĞ¿ÉµÄº¯Êı£¨¼ÓÈë¡¢É¾³ı¡¢ÅĞ¶Ï¿Õ¡¢È¡ÔªËØ£©
+// ¾ßÌå¿ÉÒÔ²Î¿¼£ºStackoverflowÉÏµÄ»Ø´ğ
 // https://stackoverflow.com/questions/15832301/understanding-container-of-macro-in-the-linux-kernel
 void sched_enqueue(thread_t *target_thread){
     if(target_thread->thread_state == RUNNING) BUG("Running Thread cannot be scheduled.");
@@ -134,17 +136,18 @@ bool sched_empty(){
     return list_empty(&(sched_list[cpuid()]));
 }
 
-// å¼€å§‹è¿è¡ŒæŸä¸ªç‰¹å®šçš„å‡½æ•°
+// ¿ªÊ¼ÔËĞĞÄ³¸öÌØ¶¨µÄº¯Êı
 void thread_run(thread_t *target){
     acquire(&target->lock);
     if(target->thread_state != RUNNABLE)BUG("target isn't runnable!");
     target->thread_state = RUNNING;
     running[cpuid()] = target;
-    //
+    swtch(&target->context, &cpu_context[cpuid()]);
+    running[cpuid()] = 0;
     release(&target->lock);
 }
 
-// sched_startå‡½æ•°å¯åŠ¨è°ƒåº¦ï¼ŒæŒ‰ç…§è°ƒåº¦çš„é˜Ÿåˆ—å¼€å§‹è¿è¡Œã€‚
+// sched_startº¯ÊıÆô¶¯µ÷¶È£¬°´ÕÕµ÷¶ÈµÄ¶ÓÁĞ¿ªÊ¼ÔËĞĞ¡£
 void sched_start(){
     while(1){
         if(sched_empty()) BUG("Scheduler list empty, no app loaded");
@@ -154,17 +157,17 @@ void sched_start(){
 }
 
 void sched_init(){
-    // åˆå§‹åŒ–è°ƒåº¦é˜Ÿåˆ—é”
+    // ³õÊ¼»¯µ÷¶È¶ÓÁĞËø
     lock_init(&schedlock);
-    // åˆå§‹åŒ–é˜Ÿåˆ—å¤´
+    // ³õÊ¼»¯¶ÓÁĞÍ·
     init_list_head(&(sched_list[cpuid()]));
 }
 
 void proc_init(){
-    // åˆå§‹åŒ–pidã€tidé”
+    // ³õÊ¼»¯pid¡¢tidËø
     lock_init(&pidlock);
     lock_init(&tidlock);
-    // æ¥ä¸‹æ¥ä»£ç æœŸæœ›çš„ç›®çš„ï¼šæ˜ å°„ç¬¬ä¸€ä¸ªç”¨æˆ·çº¿ç¨‹å¹¶ä¸”æ’å…¥è°ƒåº¦é˜Ÿåˆ—
+    // ½ÓÏÂÀ´´úÂëÆÚÍûµÄÄ¿µÄ£ºÓ³ÉäµÚÒ»¸öÓÃ»§Ïß³Ì²¢ÇÒ²åÈëµ÷¶È¶ÓÁĞ
     if(!load_thread(PUTC)) BUG("Load failed");
 }
 
@@ -177,7 +180,9 @@ void yield(void){
     acquire(&t->lock);
     t->thread_state = RUNNABLE;
     sched_enqueue(t);
+    swtch(&t->context, &cpu_context[cpuid()]);
     release(&t->lock);
 }
+
 
 
